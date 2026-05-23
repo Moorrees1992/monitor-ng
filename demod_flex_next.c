@@ -159,7 +159,11 @@ extern int json_mode;
 #define IDLE_THRESHOLD       0             // Number of idle codewords allowed in data section
 #define CAPCODES_INDEX       0
 #define DEMOD_TIMEOUT        100           // Maximum number of periods with no zero crossings before we decide that the system is not longer within a Timing lock.
-#define GROUP_BITS           17            // Centralized maximum of group msg cache
+#define FLEX_GROUP_ADDR_MIN  2029568
+#define FLEX_GROUP_ADDR_MAX  2029583
+#define GROUP_BITS           (FLEX_GROUP_ADDR_MAX - FLEX_GROUP_ADDR_MIN + 1) // Centralized maximum of group msg cache
+#define GROUP_CODE_COUNT     1000
+#define GROUP_MAX_CODES      (GROUP_CODE_COUNT - 1)
 #define PHASE_WORDS          88            // per spec, there are 88 4B words per frame
 
 // S2 C-pattern per ARIB STD-43A Table 3.2-6
@@ -214,7 +218,7 @@ struct Flex_Demodulator {
 };
 
 struct Flex_GroupHandler {
-  int64_t                     GroupCodes[GROUP_BITS][1000];
+  int64_t                     GroupCodes[GROUP_BITS][GROUP_CODE_COUNT];
   int                         GroupCycle[GROUP_BITS];
   int                         GroupFrame[GROUP_BITS];
   int                         GroupDelivering[GROUP_BITS]; // 1 = delivery in progress (fragments)
@@ -883,6 +887,15 @@ struct Flex_Next {
   const char                 *line_type_tag;       // Current message type tag for piped output
 };
 
+static int flex_group_endpoint(struct Flex_GroupHandler *handler, int groupbit) {
+  if (handler==NULL || groupbit < 0 || groupbit >= GROUP_BITS) return 0;
+
+  int endpoint = handler->GroupCodes[groupbit][CAPCODES_INDEX];
+  if (endpoint < 0) return 0;
+  if (endpoint > GROUP_MAX_CODES) return GROUP_MAX_CODES;
+  return endpoint;
+}
+
 /* Emit a FLEXTIME line at level 0 with the current confirmed OTA state.
  * Called each time a flextime component is promoted (vote threshold reached).
  * Shows the full snapshot: whatever date/time/tz components are confirmed. */
@@ -1449,7 +1462,7 @@ static int decode_fiw(struct Flex_Next * flex) {
         if(Reset == 1)
         {
                               
-                      int endpoint = flex->GroupHandler.GroupCodes[g][CAPCODES_INDEX];
+                      int endpoint = flex_group_endpoint(&flex->GroupHandler, g);
           if(REPORT_GROUP_CODES > 0)
           {
             verbprintf(3,"FLEX_NEXT: Group messages seem to have been missed; Groupbit: %i; Total Capcodes: %i; Clearing Data; Capcodes: ", g, endpoint);
@@ -2191,8 +2204,9 @@ static void parse_alphanumeric(struct Flex_Next * flex, unsigned int * phaseptr,
 group_output:
 // Implemented bierviltje code from ticket: https://github.com/EliasOenal/multimon-ng/issues/123# 
         if(flex_groupmessage == 1) {
-                int endpoint = flex->GroupHandler.GroupCodes[flex_groupbit][CAPCODES_INDEX];
-                // Debug logging - group capcodes are already in the cap_field of the output line
+                if(flex_groupbit < 0 || flex_groupbit >= GROUP_BITS) return;
+
+                int endpoint = flex_group_endpoint(&flex->GroupHandler, flex_groupbit);
                 for(int g = 1; g <= endpoint;g++)
                 {
                         verbprintf(3, "FLEX_NEXT: Group message: Groupbit: %i Total Capcodes; %i; index %i; Capcode: [%010" PRId64 "]\n", flex_groupbit, endpoint, g, flex->GroupHandler.GroupCodes[flex_groupbit][g]);
@@ -3411,11 +3425,11 @@ static void decode_phase(struct Flex_Next * flex, char PhaseNo) {
           // Temporary Address range per Section 3.8.2.3:
           // aw = 0x1F7800 - 0x1F780F (16 group delivery slots)
           // capcode = aw - 0x8000 = 2029568 - 2029583
-          if ((flex->Decode.capcode >= 2029568) && (flex->Decode.capcode <= 2029583)) {
+          if ((flex->Decode.capcode >= FLEX_GROUP_ADDR_MIN) && (flex->Decode.capcode <= FLEX_GROUP_ADDR_MAX)) {
              flex_groupmessage = 1;
-             flex_groupbit = flex->Decode.capcode - 2029568;
+             flex_groupbit = flex->Decode.capcode - FLEX_GROUP_ADDR_MIN;
              if(flex_groupbit < 0) continue;
-          }
+           }
     if (flex_groupmessage && flex->Decode.long_address) {
       // Invalid (by spec)
       verbprintf(3, "FLEX_NEXT: Don't process group messages if a long address\n");
@@ -3618,7 +3632,21 @@ static void decode_phase(struct Flex_Next * flex, char PhaseNo) {
                       flex->GroupHandler.GroupDelivering[groupbit] = 0;
                       flex->GroupHandler.GroupTimeoutCount[groupbit] = 0;
                     }
-                    
+
+                    if(groupbit < 0 || groupbit >= GROUP_BITS) {
+                      verbprintf(3, "FLEX_NEXT: Invalid group bit: %i\n", groupbit);
+                      vec_used += flex->Decode.long_address ? 2 : 1;
+                      if (flex->Decode.long_address) i++;
+                      continue;
+                    }
+
+                    if(flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX] >= GROUP_MAX_CODES) {
+                      verbprintf(3, "FLEX_NEXT: Too many capcodes for group bit: %i\n", groupbit);
+                      vec_used += flex->Decode.long_address ? 2 : 1;
+                      if (flex->Decode.long_address) i++;
+                      continue;
+                    }
+
                     flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX]++;
                     int CapcodePlacement = flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX];
                     verbprintf(1, "FLEX_NEXT: Temp group setup: bit=%i capcodes=%i adding=[%010" PRId64 "] deliver_frame=%u\n", groupbit, CapcodePlacement, flex->Decode.capcode, iAssignedFrame);
@@ -3860,10 +3888,19 @@ static void decode_phase(struct Flex_Next * flex, char PhaseNo) {
       char cap_field[1024];
       int cap_pos = snprintf(cap_field, sizeof(cap_field), "%010" PRId64, flex->Decode.capcode);
       if (flex_groupmessage == 1) {
-        int endpoint = flex->GroupHandler.GroupCodes[flex_groupbit][CAPCODES_INDEX];
-        for (int g = 1; g <= endpoint; g++)
-          cap_pos += snprintf(cap_field + cap_pos, sizeof(cap_field) - cap_pos,
-                              " %010" PRId64, flex->GroupHandler.GroupCodes[flex_groupbit][g]);
+        int endpoint = flex_group_endpoint(&flex->GroupHandler, flex_groupbit);
+        for (int g = 1; g <= endpoint; g++) {
+          if (cap_pos >= (int)sizeof(cap_field) - 1)
+            break;
+          size_t cap_rem = sizeof(cap_field) - (size_t)cap_pos;
+          int wrote = snprintf(cap_field + cap_pos, cap_rem, " %010" PRId64,
+                               flex->GroupHandler.GroupCodes[flex_groupbit][g]);
+          if (wrote < 0 || (size_t)wrote >= cap_rem) {
+            cap_pos = (int)sizeof(cap_field) - 1;
+            break;
+          }
+          cap_pos += wrote;
+        }
       }
       // Build line prefix into flex->line_prefix for atomic output by parse functions
       snprintf(flex->line_prefix, sizeof(flex->line_prefix),
