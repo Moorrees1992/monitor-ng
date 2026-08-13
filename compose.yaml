@@ -1,0 +1,17 @@
+services:
+  multimon-ng:
+    image: ${MULTIMON_IMAGE:-ghcr.io/moorrees1992/monitor-ng:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    stdin_open: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - "-"

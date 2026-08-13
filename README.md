@@ -90,6 +90,35 @@ the included signal generator, override the entrypoint:
 docker run --rm --entrypoint gen-ng multimon-ng -t raw -d "123" - | wc -c
 ```
 
+### Docker Compose
+
+`compose.yaml` uses the published GHCR image by default. Build it from the
+local checkout instead with `--build`:
+
+```sh
+docker compose build
+```
+
+Decode a file by adding a read-only bind mount to a one-off container:
+
+```sh
+docker compose run --rm -T \
+  -v "$(pwd)/test/samples:/samples:ro" \
+  multimon-ng -q -a POCSAG512 /samples/POCSAG_sample_-_512_bps.flac
+```
+
+Pipe raw samples through standard input (`-T` prevents terminal conversion of
+the binary stream):
+
+```sh
+rtl_fm -f 403600000 -s 22050 \
+  | docker compose run --rm -T multimon-ng \
+      -t raw -a FMSFSK -a AFSK1200 -
+```
+
+Override the image without editing the file by setting `MULTIMON_IMAGE`, for
+example `MULTIMON_IMAGE=multimon-ng:local docker compose run --rm multimon-ng -h`.
+
 ### Gitea Container Registry
 
 The workflow in `.gitea/workflows/docker.yml` builds and tests pull requests.
