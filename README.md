@@ -102,6 +102,18 @@ Registry of the Gitea instance. Configure these Actions secrets:
 Images pushed from `master` receive `latest` and `sha-<commit>` tags. A stable
 tag such as `v1.6.0` produces `1.6.0`, `1.6`, `1`, and `sha-<commit>` tags.
 
+### GitHub Container Registry
+
+The workflow in `.github/workflows/docker.yml` provides the same build, tests,
+and runtime smoke test on GitHub-hosted runners. Pull requests only build and
+test. Pushes to `master` and tags matching `v*` publish to
+`ghcr.io/<owner>/<repository>`.
+
+No custom secrets or self-hosted runner are required. The workflow grants the
+automatically provided `GITHUB_TOKEN` `packages: write` permission. Images from
+`master` receive `latest` and `sha-<commit>` tags; stable version tags receive
+the same semantic-version tags as the Gitea workflow.
+
 ### Windows MinGW Builds
 
 #### On Windows (MSYS2/MinGW)

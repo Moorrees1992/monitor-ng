@@ -1,0 +1,75 @@
+name: Container image (GitHub)
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build image and run build-time tests
+        shell: bash
+        run: |
+          VERSION="${GITHUB_SHA:0:12}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+
+          docker build \
+            --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --build-arg SOURCE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --build-arg VCS_REF="$GITHUB_SHA" \
+            --build-arg VERSION="$VERSION" \
+            --tag multimon-ng:ci \
+            .
+
+      - name: Smoke-test runtime image
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh multimon-ng:ci -ec '
+            gen-ng -t flac -d 123456 /tmp/dtmf.flac
+            multimon-ng -q -a DTMF /tmp/dtmf.flac
+          ' | grep -F "DTMF: 6"
+
+      - name: Publish to GitHub Container Registry
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPOSITORY="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${REPOSITORY}"
+
+          printf '%s' "$GHCR_TOKEN" \
+            | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+
+          TAGS=("sha-${GITHUB_SHA:0:12}")
+          if [[ "$GITHUB_REF" == "refs/heads/master" ]]; then
+            TAGS+=("latest")
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAGS+=("$VERSION")
+
+            if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              TAGS+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "${BASH_REMATCH[1]}")
+            fi
+          fi
+
+          for TAG in "${TAGS[@]}"; do
+            docker tag multimon-ng:ci "${IMAGE}:${TAG}"
+            docker push "${IMAGE}:${TAG}"
+          done
