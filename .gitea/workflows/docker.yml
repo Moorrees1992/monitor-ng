@@ -1,0 +1,94 @@
+name: Container image
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build image and run build-time tests
+        shell: bash
+        env:
+          GITEA_REF: ${{ gitea.ref }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_SERVER_URL: ${{ gitea.server_url }}
+          GITEA_SHA: ${{ gitea.sha }}
+        run: |
+          VERSION="${GITEA_SHA:0:12}"
+          if [[ "$GITEA_REF" == refs/tags/v* ]]; then
+            VERSION="${GITEA_REF#refs/tags/v}"
+          fi
+
+          docker build \
+            --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --build-arg SOURCE_URL="${GITEA_SERVER_URL}/${GITEA_REPOSITORY}" \
+            --build-arg VCS_REF="$GITEA_SHA" \
+            --build-arg VERSION="$VERSION" \
+            --tag multimon-ng:ci \
+            .
+
+      - name: Smoke-test runtime image
+        shell: bash
+        env:
+          WORKSPACE: ${{ gitea.workspace }}
+        run: |
+          docker run --rm \
+            --volume "${WORKSPACE}/test/samples:/samples:ro" \
+            multimon-ng:ci \
+            -q -a POCSAG512 /samples/POCSAG_sample_-_512_bps.flac \
+            | grep -F "512 B SIDE ZZZZZZ"
+
+      - name: Publish to Gitea Container Registry
+        if: gitea.event_name == 'push'
+        shell: bash
+        env:
+          GITEA_REF: ${{ gitea.ref }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_SERVER_URL: ${{ gitea.server_url }}
+          GITEA_SHA: ${{ gitea.sha }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+        run: |
+          SERVER_WITHOUT_SCHEME="${GITEA_SERVER_URL#*://}"
+          REGISTRY="${SERVER_WITHOUT_SCHEME%%/*}"
+          REPOSITORY="$(printf '%s' "$GITEA_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="${REGISTRY}/${REPOSITORY}"
+
+          if [[ -z "$REGISTRY_USER" || -z "$REGISTRY_TOKEN" ]]; then
+            echo "REGISTRY_USER and REGISTRY_TOKEN must be configured as Actions secrets." >&2
+            exit 1
+          fi
+
+          printf '%s' "$REGISTRY_TOKEN" \
+            | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+          trap 'docker logout "$REGISTRY"' EXIT
+
+          TAGS=("sha-${GITEA_SHA:0:12}")
+          if [[ "$GITEA_REF" == "refs/heads/master" ]]; then
+            TAGS+=("latest")
+          elif [[ "$GITEA_REF" == refs/tags/v* ]]; then
+            VERSION="${GITEA_REF#refs/tags/v}"
+            TAGS+=("$VERSION")
+
+            if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              TAGS+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "${BASH_REMATCH[1]}")
+            fi
+          fi
+
+          for TAG in "${TAGS[@]}"; do
+            docker tag multimon-ng:ci "${IMAGE}:${TAG}"
+            docker push "${IMAGE}:${TAG}"
+          done

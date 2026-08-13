@@ -1,0 +1,17 @@
+.git
+.github
+.gitea
+
+build
+build-*
+_codeql_build_dir
+_codeql_detected_source_root
+
+*.bak
+*.dll
+*.exe
+*.log
+*.o
+*.so
+*.swp
+*.swo

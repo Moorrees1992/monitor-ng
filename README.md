@@ -56,6 +56,52 @@ system-wide at `/usr` or into your user directory), pass `CMAKE_INSTALL_PREFIX`:
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr
 ```
 
+## Docker
+
+The Docker image is a headless build intended for files and standard input.
+PulseAudio, X11, and SDL3 support are disabled. SoX is included for WAV, FLAC,
+MP3, OGG, and other supported file formats.
+
+Build the image (the test suite runs as part of the build):
+
+```sh
+docker build -t multimon-ng .
+```
+
+Decode a mounted file:
+
+```sh
+docker run --rm \
+  -v "$(pwd)/test/samples:/samples:ro" \
+  multimon-ng -q -a POCSAG512 /samples/POCSAG_sample_-_512_bps.flac
+```
+
+Pipe raw 16-bit, single-channel samples at 22050 Hz through standard input:
+
+```sh
+rtl_fm -f 403600000 -s 22050 \
+  | docker run --rm -i multimon-ng -t raw -a FMSFSK -a AFSK1200 -
+```
+
+With no arguments the container reads raw samples from standard input. To use
+the included signal generator, override the entrypoint:
+
+```sh
+docker run --rm --entrypoint gen-ng multimon-ng -t raw -d "123" - | wc -c
+```
+
+### Gitea Container Registry
+
+The workflow in `.gitea/workflows/docker.yml` builds and tests pull requests.
+Pushes to `master` and tags matching `v*` are also published to the Container
+Registry of the Gitea instance. Configure these Actions secrets:
+
+- `REGISTRY_USER`: the Gitea user that publishes the package
+- `REGISTRY_TOKEN`: a personal access token with package write access
+
+Images pushed from `master` receive `latest` and `sha-<commit>` tags. A stable
+tag such as `v1.6.0` produces `1.6.0`, `1.6`, `1`, and `sha-<commit>` tags.
+
 ### Windows MinGW Builds
 
 #### On Windows (MSYS2/MinGW)
