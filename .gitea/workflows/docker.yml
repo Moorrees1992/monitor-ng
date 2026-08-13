@@ -42,14 +42,11 @@ jobs:
 
       - name: Smoke-test runtime image
         shell: bash
-        env:
-          WORKSPACE: ${{ gitea.workspace }}
         run: |
-          docker run --rm \
-            --volume "${WORKSPACE}/test/samples:/samples:ro" \
-            multimon-ng:ci \
-            -q -a POCSAG512 /samples/POCSAG_sample_-_512_bps.flac \
-            | grep -F "512 B SIDE ZZZZZZ"
+          docker run --rm --entrypoint sh multimon-ng:ci -ec '
+            gen-ng -t flac -d 123456 /tmp/dtmf.flac
+            multimon-ng -q -a DTMF /tmp/dtmf.flac
+          ' | grep -F "DTMF: 6"
 
       - name: Publish to Gitea Container Registry
         if: gitea.event_name == 'push'
