@@ -3,7 +3,7 @@ name: Container image (GitHub)
 on:
   push:
     branches:
-      - master
+      - main
     tags:
       - "v*"
   pull_request:
@@ -58,7 +58,7 @@ jobs:
           trap 'docker logout ghcr.io' EXIT
 
           TAGS=("sha-${GITHUB_SHA:0:12}")
-          if [[ "$GITHUB_REF" == "refs/heads/master" ]]; then
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
             TAGS+=("latest")
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
